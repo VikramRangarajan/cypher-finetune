@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 from unsloth import FastModel # noqa
-import torch
+from langchain_neo4j.chains.graph_qa.prompts import CYPHER_GENERATION_TEMPLATE
 from datasets import load_dataset
 from dotenv import load_dotenv
 from peft import LoraConfig, TaskType
@@ -52,7 +52,7 @@ class TrainingConfig(BaseSettings):
     # Dataset settings
     dataset_name: str = "neo4j/text2cypher-2025v1"
     dataset_split: str = "train"
-    validation_split: Optional[str] = "test"
+    validation_split: str = "test"
     max_seq_length: int = 2048
 
     # Training hyperparameters
@@ -125,7 +125,8 @@ def prepare_dataset(config: TrainingConfig, tokenizer):
 
     # Apply formatting
     def format_chat_template(example: dict) -> dict:
-        system_prompt = f"You are an expert in converting natural language questions to Cypher queries. Use the following schema: {example['schema']}"
+        langchain_prompt = CYPHER_GENERATION_TEMPLATE.removesuffix("\nThe question is:\n{question}")
+        system_prompt = langchain_prompt.format(schema=example["schema"], examples="Not Provided\n")
         messages = [
             {"role": "system", "content": system_prompt},
             {"role": "user", "content": example["question"]},
@@ -146,22 +147,31 @@ def prepare_dataset(config: TrainingConfig, tokenizer):
     )
 
     # Load validation dataset if specified
-    eval_dataset = None
-    if config.validation_split:
-        logger.info(f"Loading validation dataset: {config.validation_split}")
-        eval_dataset = load_dataset(config.dataset_name, split=config.validation_split)
-        eval_dataset = eval_dataset.map(
-            format_chat_template,
-            num_proc=4,
-            remove_columns=eval_dataset.column_names,
-            desc="Formatting validation chat templates",
-        )
+    logger.info(f"Loading validation dataset: {config.validation_split}")
+    eval_dataset = load_dataset(config.dataset_name, split=config.validation_split)
+    eval_dataset = standardize_data_formats(eval_dataset)
+    eval_dataset = eval_dataset.map(
+        format_chat_template,
+        num_proc=4,
+        remove_columns=eval_dataset.column_names,
+        desc="Formatting validation chat templates",
+    )
 
     logger.info(f"Training dataset size: {len(dataset)}")
-    if eval_dataset:
-        logger.info(f"Validation dataset size: {len(eval_dataset)}")
+    logger.info(f"Validation dataset size: {len(eval_dataset)}")
 
-    return dataset, eval_dataset
+    cypherbench = load_dataset("megagonlabs/cypherbench", split="test")
+    cypherbench = cypherbench.rename_columns({"gold_cypher": "cypher", "nl_question": "question"})
+    cypherbench = cypherbench.add_column("schema", ["Not Provided"]*len(cypherbench))
+    cypherbench = standardize_data_formats(cypherbench)
+    cypherbench = cypherbench.map(
+        format_chat_template,
+        num_proc=4,
+        remove_columns=cypherbench.column_names
+    )
+
+
+    return dataset, {"eval_ds": eval_dataset, "cypherbench": cypherbench}
 
 
 def main():
@@ -190,6 +200,7 @@ def main():
 
     # Prepare dataset
     train_dataset, eval_dataset = prepare_dataset(config, tokenizer)
+    breakpoint()
 
 
     # Create output directory
@@ -243,7 +254,10 @@ def main():
 
     # Save final model
     logger.info(f"Saving final model to {output_dir / 'final'}")
-    trainer.save_model(str(output_dir / "final"))
+    # trainer.save_model(str(output_dir / "final"))
+    model = model.merge_and_unload()
+    model.save_pretrained(str(output_dir / "final"), safe_serialization=False)
+    # model.save_pretrained_merged(str(output_dir / "final"), tokenizer)
     tokenizer.save_pretrained(str(output_dir / "final"))
 
     # Finish W&B
