@@ -13,4 +13,5 @@
 . ~/.bashrc
 module purge
 
-uv run train.py --lora_r=32 --lora_alpha=32
+source .venv/bin/activate
+python train.py --lora_r=32 --lora_alpha=32

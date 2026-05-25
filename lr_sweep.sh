@@ -13,4 +13,5 @@
 . ~/.bashrc
 module purge
 
-uv run train.py --learning_rate=0.000002
+source .venv/bin/activate
+python train.py --learning_rate=0.000002

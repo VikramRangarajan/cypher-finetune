@@ -13,4 +13,5 @@
 . ~/.bashrc
 module purge
 
-uv run train.py
+source .venv/bin/activate
+python train.py

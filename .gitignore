@@ -220,3 +220,5 @@ __marimo__/
 wandb
 output
 *.out
+unsloth_compiled_cache
+uv.lock
