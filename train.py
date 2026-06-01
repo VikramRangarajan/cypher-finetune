@@ -39,15 +39,13 @@ class TrainingConfig(BaseSettings):
 
     # Model settings
     model_name: str = "unsloth/gemma-4-E2B-it"
-    use_flash_attention: bool = False
-    use_4bit: bool = False
+    use_4bit: bool = True
 
     # LoRA settings
     use_lora: bool = True
     lora_r: int = 8
     lora_alpha: int = 8
     lora_dropout: float = 0.05
-    lora_target_modules: Optional[str] = None
 
     # Dataset settings
     dataset_name: str = "neo4j/text2cypher-2025v1"
@@ -58,8 +56,8 @@ class TrainingConfig(BaseSettings):
     # Training hyperparameters
     output_dir: str = "./output"
     num_train_epochs: int = 1
-    per_device_train_batch_size: int = 2
-    per_device_eval_batch_size: int = 2
+    per_device_train_batch_size: int = 8
+    per_device_eval_batch_size: int = 8
     gradient_accumulation_steps: int = 2
     learning_rate: float = 2e-4
     warmup_steps: int = 5
@@ -203,7 +201,7 @@ def main():
 
 
     # Create output directory
-    output_dir = Path(config.output_dir) / wandb.run.name
+    output_dir = Path(config.output_dir) / (wandb.run.name if wandb.run is not None else "DBG")
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Training arguments
@@ -249,7 +247,6 @@ def main():
     # Train
     logger.info("Starting training...")
     trainer.train()
-    trainer.evaluate()
 
     # Save final model
     logger.info(f"Saving final model to {output_dir / 'final'}")
