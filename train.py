@@ -200,7 +200,6 @@ def main():
 
     # Prepare dataset
     train_dataset, eval_dataset = prepare_dataset(config, tokenizer)
-    breakpoint()
 
 
     # Create output directory

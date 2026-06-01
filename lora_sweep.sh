@@ -5,13 +5,13 @@
 #SBATCH -t 4:00:00
 #SBATCH -q standby
 
-#SBATCH --mem=16G
+#SBATCH --mem=32G
 
-#SBATCH -p a100-80gb,a10
+#SBATCH -p a100-80gb
 #SBATCH --gres=gpu:1
 
 . ~/.bashrc
 module purge
 
 source .venv/bin/activate
-python train.py --lora_r=32 --lora_alpha=32
+python train.py --lora_r=16 --lora_alpha=16

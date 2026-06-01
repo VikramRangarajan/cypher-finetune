@@ -5,13 +5,13 @@
 #SBATCH -t 4:00:00
 #SBATCH -q standby
 
-#SBATCH --mem=16G
+#SBATCH --mem=32G
 
-#SBATCH -p a100-80gb,a10
+#SBATCH -p a100-80gb
 #SBATCH --gres=gpu:1
 
 . ~/.bashrc
 module purge
 
 source .venv/bin/activate
-python train.py --learning_rate=0.000002
+python train.py --learning_rate=0.00002
