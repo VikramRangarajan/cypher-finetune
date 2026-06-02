@@ -15,4 +15,5 @@ cd ~/cypherbench/docker
 bash start_neo4j_train_apptainer.sh
 cd ~/cypher-finetune
 source .venv/bin/activate
+python wait_until_train_db_up.py
 python grpo.py

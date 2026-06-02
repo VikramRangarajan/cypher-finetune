@@ -2,8 +2,16 @@ from unsloth import FastVisionModel
 import json
 import torch
 from langchain_neo4j.chains.graph_qa.prompts import CYPHER_GENERATION_TEMPLATE
+import sys
+from pathlib import Path
+import wandb
+import os
+
 sys.path.insert(0, str(Path.home() / "cypherbench"))
 from cypherbench.neo4j_connector import Neo4jConnector
+from cypherbench.metrics.execution_accuracy import execution_accuracy
+from cypherbench.metrics.executable import executable
+
 max_seq_length = 4096 # Can increase for longer reasoning traces
 lora_rank = 32 # Larger rank = smarter, but slower
 
@@ -17,6 +25,30 @@ graph2conn = {}
 for graph in train_graphs:
     info = neo4j_info['full'][graph]
     graph2conn[graph] = Neo4jConnector(name=graph, **info)
+
+from cypherbench.schema import PropertyGraphSchema, DataType
+
+graph2schema = {}
+for graph in train_graphs:
+    path = Path.home() / "cypherbench" / "benchmark" / "graphs" / "schemas" / f"{graph}_schema.json"
+    with open(path) as fin:
+        schema = PropertyGraphSchema.from_json(
+            json.load(fin),
+            add_meta_properties={"name": DataType.STR}
+        ).to_sorted()
+    graph2schema[graph] = schema.to_str(exclude_description=True)
+
+PROMPT_TEMPLATE = """Translate the question to Cypher query based on the schema of a Neo4j knowledge graph.
+- Output the Cypher query in a single line, without any additional output or explanation. Do not wrap the query with any formatting like ```.
+- Perform graph pattern matching in the `MATCH` clause if possible.
+- Avoid listing the same entity multiple times in the results. However, if multiple distinct entities share the same name, their names should be repeated as separate entries.
+- Do not return node objects. Instead, return entity names or properties.
+
+Graph Schema:
+{schema}
+
+Question: {question}
+Cypher: """
 
 gemma4_models = [
     # Gemma-4 instruct models:
@@ -53,14 +85,10 @@ model = FastVisionModel.get_peft_model(
 """# Data & RL task setup
 """
 
-prompt = CYPHER_GENERATION_TEMPLATE
-
-print(prompt)
-
 """First, let's prompt the model without RL and see how it goes:"""
 
 text = tokenizer.apply_chat_template(
-    [{"role": "user", "content": prompt.strip()}],
+    [{"role": "user", "content": PROMPT_TEMPLATE.strip()}],
     tokenize = False,
     add_generation_prompt = True,
 )
@@ -88,9 +116,19 @@ PRINTER = 0
 
 def valid_cypher(completions, **kwargs):
     scores = []
-    for completion in completions:
+    for i, completion in enumerate(completions):
         response = completion[0]["content"]
-        score = 0
+        executable_score = executable(response, None, graph2conn[kwargs["graph"][i]])
+        score = 1.0 if executable_score > 0 else -1.0
+        scores.append(score)
+    return scores
+
+def accurate_cypher(completions, **kwargs):
+    scores = []
+    for i, completion in enumerate(completions):
+        response = completion[0]["content"]
+        executable_score = execution_accuracy(response, kwargs["gold_cypher"][i], graph2conn[kwargs["graph"][i]])
+        score = 3.0 if executable_score > 0 else -3.0
         scores.append(score)
     return scores
 
@@ -99,23 +137,27 @@ def valid_cypher(completions, **kwargs):
 Create the training dataset.
 """
 
-from datasets import Dataset
+from datasets import load_dataset
 
-dataset = Dataset.from_list([
-    {
-        "prompt": [{"role": "user", "content": prompt.strip()}],
-        "answer": 0,
-    }
-] * 1000)
+dataset = load_dataset("megagonlabs/cypherbench", split="train")
 
+def format_prompt(sample):
+    content = PROMPT_TEMPLATE.format(schema=graph2schema[sample["graph"]], question=sample["nl_question"])
+    return [{"role": "user", "content": content}]
+
+dataset = dataset.map(lambda x: {"prompt": format_prompt(x)})
+
+prompt_template_example = PROMPT_TEMPLATE.format(schema=graph2schema["biology"], question="Sample question?")
 maximum_length = len(tokenizer.apply_chat_template(
-    [{"role": "user", "content": prompt.strip()}],
+    [{"role": "user", "content": prompt_template_example}],
     add_generation_prompt = True
 ))
 
 print(f"Maximum prompt length: {maximum_length}")
 print("\nDataset sample:")
 print(dataset[0])
+print("\nPrompt:")
+print(dataset[0]["prompt"])
 
 """<a name="Train"></a>
 ### Train the model
@@ -127,7 +169,7 @@ Now set up GRPO Trainer and all configurations! We also support GSPO, GAPO, Dr G
 max_completion_length = max_seq_length - (maximum_length + 1)
 
 from trl import GRPOConfig, GRPOTrainer
-run_name = (wandb.run.name if wandb.run is not None else "DBG")
+run_name = (wandb.run.name if wandb.run is not None and wandb.run.name is not None else "DBG")
 training_args = GRPOConfig(
     temperature = 1.0,
     learning_rate = 5e-5,
@@ -136,14 +178,14 @@ training_args = GRPOConfig(
     lr_scheduler_type = "linear",
     optim = "adamw_8bit",
     logging_steps = 1,
-    per_device_train_batch_size = 1,
-    gradient_accumulation_steps = 2, # Increase to 4 for smoother training
+    per_device_train_batch_size = 2,
+    gradient_accumulation_steps = 4, # Increase to 4 for smoother training
     num_generations = 2, # Decrease if out of memory
     max_completion_length = max_completion_length,
     # num_train_epochs = 1, # Set to 1 for a full training run
-    max_steps = 60,
+    max_steps = 600,
     save_steps = 100,
-    report_to = "none", # Can use Weights & Biases, TrackIO
+    report_to = "none" if "DBG" in os.environ else "wandb", # Can use Weights & Biases, TrackIO
     output_dir = Path("output") / run_name,
     epsilon = 0.2,
     epsilon_high = 0.28, # one sided
@@ -176,7 +218,8 @@ trainer = GRPOTrainer(
     model = model,
     processing_class = tokenizer,
     reward_funcs = [
-        valid_cypher
+        valid_cypher,
+        accurate_cypher,
     ],
     args = training_args,
     train_dataset = dataset,
@@ -191,7 +234,7 @@ trainer = GRPOTrainer(
 **NOTE** A T4 free GPU might take 5 minutes for one generation sadly since it's an old GPU - A100 or H100 will be much faster!
 """
 
-trainer.train(resume_from_checkpoint=True)
+trainer.train()
 
 """And now with the LoRA we just trained with GRPO - we first save the LoRA first!"""
 
@@ -206,6 +249,8 @@ tensors = {}
 with safe_open(f"output/{run_name}_final/adapter_model.safetensors", framework = "pt") as f:
     # Verify both A and B are non zero
     for key in f.keys():
+        if "audio_tower" in key or "vision_tower" in key:
+            continue
         tensor = f.get_tensor(key)
         n_zeros = (tensor == 0).sum()
         assert(n_zeros.item() != tensor.numel())
@@ -216,7 +261,7 @@ Now let's try the model we just trained!
 """
 
 text = tokenizer.apply_chat_template(
-    [{"role": "user", "content": prompt.strip()}],
+    [{"role": "user", "content": PROMPT_TEMPLATE.strip()}],
     tokenize = False,
     add_generation_prompt = True,
 )
