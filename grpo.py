@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 import wandb
 import os
+import asyncio
 
 sys.path.insert(0, str(Path.home() / "cypherbench"))
 from cypherbench.neo4j_connector import Neo4jConnector
@@ -14,6 +15,7 @@ from cypherbench.metrics.executable import executable
 
 max_seq_length = 4096 # Can increase for longer reasoning traces
 lora_rank = 32 # Larger rank = smarter, but slower
+run_name = os.environ["RUN_NAME"]
 
 
 with open(Path.home() / "cypherbench" / "neo4j_info.json") as fin:
@@ -123,6 +125,18 @@ def valid_cypher(completions, **kwargs):
         scores.append(score)
     return scores
 
+async def valid_cypher_async(completions, **kwargs):
+    async def valid_cypher_async_inner(completion, graph):
+        response = completion[0]["content"]
+        executable_score = executable(response, None, graph)
+        return 1.0 if executable_score > 0 else -1.0
+    futures = []
+    for i, completion in enumerate(completions):
+        futures.append(valid_cypher_async_inner(completion, graph2conn[kwargs["graph"][i]]))
+    scores = await asyncio.gather(*futures)
+    return scores
+
+
 def accurate_cypher(completions, **kwargs):
     scores = []
     for i, completion in enumerate(completions):
@@ -130,6 +144,17 @@ def accurate_cypher(completions, **kwargs):
         executable_score = execution_accuracy(response, kwargs["gold_cypher"][i], graph2conn[kwargs["graph"][i]])
         score = 3.0 if executable_score > 0 else -3.0
         scores.append(score)
+    return scores
+
+async def accurate_cypher_async(completions, **kwargs):
+    async def accurate_cypher_async_inner(completion, gold_cypher, graph):
+        response = completion[0]["content"]
+        executable_score = execution_accuracy(response, gold_cypher, graph)
+        return 3.0 if executable_score > 0 else -3.0
+    futures = []
+    for i, completion in enumerate(completions):
+        futures.append(accurate_cypher_async_inner(completion, kwargs["gold_cypher"][i], graph2conn[kwargs["graph"][i]]))
+    scores = await asyncio.gather(*futures)
     return scores
 
 """# Dataset Preparation
@@ -169,7 +194,6 @@ Now set up GRPO Trainer and all configurations! We also support GSPO, GAPO, Dr G
 max_completion_length = max_seq_length - (maximum_length + 1)
 
 from trl import GRPOConfig, GRPOTrainer
-run_name = (wandb.run.name if wandb.run is not None and wandb.run.name is not None else "DBG")
 training_args = GRPOConfig(
     temperature = 1.0,
     learning_rate = 5e-5,
@@ -183,9 +207,10 @@ training_args = GRPOConfig(
     num_generations = 2, # Decrease if out of memory
     max_completion_length = max_completion_length,
     # num_train_epochs = 1, # Set to 1 for a full training run
-    max_steps = 600,
+    max_steps = 300,
     save_steps = 100,
-    report_to = "none" if "DBG" in os.environ else "wandb", # Can use Weights & Biases, TrackIO
+    report_to = "none" if run_name == "DBG" else "wandb", # Can use Weights & Biases, TrackIO
+    run_name = run_name,
     output_dir = Path("output") / run_name,
     epsilon = 0.2,
     epsilon_high = 0.28, # one sided
