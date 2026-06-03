@@ -21,14 +21,6 @@ if "TRAINER_RESUME" in os.environ:
     print("Resuming from trainer checkpoint")
 print("Wandb run name:", run_name)
 
-def handler(signum, frame):
-    print("Caught SIGUSR1 - saving and exiting for requeue")
-    sys.exit(0)
-
-signal.signal(signal.SIGUSR1, handler)
-signal.signal(signal.SIGTERM, handler)
-signal.signal(signal.SIGINT, handler)
-
 
 with open(Path.home() / "cypherbench" / "neo4j_info.json") as fin:
     neo4j_info = json.load(fin)
@@ -207,9 +199,10 @@ training_args = GRPOConfig(
     gradient_accumulation_steps = 4, # Increase to 4 for smoother training
     num_generations = 2, # Decrease if out of memory
     max_completion_length = max_completion_length,
-    # num_train_epochs = 1, # Set to 1 for a full training run
-    max_steps = 2000,
+    num_train_epochs = 1, # Set to 1 for a full training run
+    # max_steps = 2000,
     save_steps = 5,
+    # enable_jit_checkpoint=True,
     report_to = "none" if run_name == "DBG" else "wandb", # Can use Weights & Biases, TrackIO
     run_name = run_name,
     output_dir = Path("output") / run_name,
