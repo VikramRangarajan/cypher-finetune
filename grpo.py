@@ -3,6 +3,7 @@ import json
 import torch
 from langchain_neo4j.chains.graph_qa.prompts import CYPHER_GENERATION_TEMPLATE
 import sys
+import signal
 from pathlib import Path
 import wandb
 import os
@@ -16,6 +17,17 @@ from cypherbench.metrics.executable import executable
 max_seq_length = 4096 # Can increase for longer reasoning traces
 lora_rank = 32 # Larger rank = smarter, but slower
 run_name = os.environ["RUN_NAME"]
+if "TRAINER_RESUME" in os.environ:
+    print("Resuming from trainer checkpoint")
+print("Wandb run name:", run_name)
+
+def handler(signum, frame):
+    print("Caught SIGUSR1 - saving and exiting for requeue")
+    sys.exit(0)
+
+signal.signal(signal.SIGUSR1, handler)
+signal.signal(signal.SIGTERM, handler)
+signal.signal(signal.SIGINT, handler)
 
 
 with open(Path.home() / "cypherbench" / "neo4j_info.json") as fin:
@@ -96,19 +108,19 @@ text = tokenizer.apply_chat_template(
 )
 
 from transformers import TextStreamer
-print("=" * 50)
-print("BASE MODEL OUTPUT (before RL training):")
-print("=" * 50)
+# print("=" * 50)
+# print("BASE MODEL OUTPUT (before RL training):")
+# print("=" * 50)
 
-inputs = tokenizer(
-    text = text,
-    add_special_tokens = False,
-    return_tensors = "pt",
-).to("cuda")
+# inputs = tokenizer(
+#     text = text,
+#     add_special_tokens = False,
+#     return_tensors = "pt",
+# ).to("cuda")
 
-text_streamer = TextStreamer(tokenizer, skip_prompt = True)
-result = model.generate(**inputs, streamer = text_streamer, max_new_tokens = 128,
-                        use_cache = True, temperature = 1.0, top_p = 0.95, top_k = 64)
+# text_streamer = TextStreamer(tokenizer, skip_prompt = True)
+# result = model.generate(**inputs, streamer = text_streamer, max_new_tokens = 128,
+#                         use_cache = True, temperature = 1.0, top_p = 0.95, top_k = 64)
 
 """# Reward functions"""
 
@@ -117,15 +129,6 @@ import numpy as np
 PRINTER = 0
 
 def valid_cypher(completions, **kwargs):
-    scores = []
-    for i, completion in enumerate(completions):
-        response = completion[0]["content"]
-        executable_score = executable(response, None, graph2conn[kwargs["graph"][i]])
-        score = 1.0 if executable_score > 0 else -1.0
-        scores.append(score)
-    return scores
-
-async def valid_cypher_async(completions, **kwargs):
     async def valid_cypher_async_inner(completion, graph):
         response = completion[0]["content"]
         executable_score = executable(response, None, graph)
@@ -133,20 +136,15 @@ async def valid_cypher_async(completions, **kwargs):
     futures = []
     for i, completion in enumerate(completions):
         futures.append(valid_cypher_async_inner(completion, graph2conn[kwargs["graph"][i]]))
-    scores = await asyncio.gather(*futures)
+
+    async def _run():
+        scores = await asyncio.gather(*futures)
+        return scores
+    scores = asyncio.run(_run())
     return scores
 
 
 def accurate_cypher(completions, **kwargs):
-    scores = []
-    for i, completion in enumerate(completions):
-        response = completion[0]["content"]
-        executable_score = execution_accuracy(response, kwargs["gold_cypher"][i], graph2conn[kwargs["graph"][i]])
-        score = 3.0 if executable_score > 0 else -3.0
-        scores.append(score)
-    return scores
-
-async def accurate_cypher_async(completions, **kwargs):
     async def accurate_cypher_async_inner(completion, gold_cypher, graph):
         response = completion[0]["content"]
         executable_score = execution_accuracy(response, gold_cypher, graph)
@@ -154,7 +152,10 @@ async def accurate_cypher_async(completions, **kwargs):
     futures = []
     for i, completion in enumerate(completions):
         futures.append(accurate_cypher_async_inner(completion, kwargs["gold_cypher"][i], graph2conn[kwargs["graph"][i]]))
-    scores = await asyncio.gather(*futures)
+    async def _run():
+        scores = await asyncio.gather(*futures)
+        return scores
+    scores = asyncio.run(_run())
     return scores
 
 """# Dataset Preparation
@@ -207,8 +208,8 @@ training_args = GRPOConfig(
     num_generations = 2, # Decrease if out of memory
     max_completion_length = max_completion_length,
     # num_train_epochs = 1, # Set to 1 for a full training run
-    max_steps = 300,
-    save_steps = 100,
+    max_steps = 2000,
+    save_steps = 5,
     report_to = "none" if run_name == "DBG" else "wandb", # Can use Weights & Biases, TrackIO
     run_name = run_name,
     output_dir = Path("output") / run_name,
@@ -239,6 +240,12 @@ You might have to wait 150 to 200 steps for any action. You'll probably get low 
 # For optional training + evaluation
 # new_dataset = dataset.train_test_split(test_size = 0.01)
 
+if "TRAINER_RESUME" in os.environ and run_name != "DBG":
+    runs = wandb.Api().runs("vr-umiacs/huggingface")
+    runs = [r for r in runs if r.name == run_name]
+    if runs:
+        wandb.init(project="huggingface", resume="must", id=runs[0].id)
+
 trainer = GRPOTrainer(
     model = model,
     processing_class = tokenizer,
@@ -259,7 +266,9 @@ trainer = GRPOTrainer(
 **NOTE** A T4 free GPU might take 5 minutes for one generation sadly since it's an old GPU - A100 or H100 will be much faster!
 """
 
-trainer.train()
+resume = True if "TRAINER_RESUME" in os.environ else None
+
+trainer.train(resume_from_checkpoint = resume)
 
 """And now with the LoRA we just trained with GRPO - we first save the LoRA first!"""
 
