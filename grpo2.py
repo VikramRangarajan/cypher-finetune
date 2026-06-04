@@ -3,17 +3,15 @@ import torch
 import sys
 import os
 import asyncio
-import time
 from pathlib import Path
 import neo4j
+import neo4j.exceptions
 
 sys.path.insert(0, str(Path.home() / "cypherbench"))
-from cypherbench.neo4j_connector import Neo4jConnector
 from cypherbench.metrics.execution_accuracy import to_hashable, _compare_execution
-from cypherbench.metrics.executable import executable
 from cypherbench.schema import PropertyGraphSchema, DataType
 
-from transformers import AutoModelForCausalLM, AutoTokenizer, TextStreamer
+from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import get_peft_model, LoraConfig
 from datasets import load_dataset
 from trl import GRPOConfig, GRPOTrainer
@@ -75,6 +73,7 @@ model = AutoModelForCausalLM.from_pretrained(
 )
 
 tokenizer = AutoTokenizer.from_pretrained("google/gemma-4-E2B-it")
+assert tokenizer is not None
 
 lora_config = LoraConfig(
     r=lora_rank,
@@ -92,12 +91,9 @@ async def accurate_cypher(completions, **kwargs):
     content = [completion[0]["content"] for completion in completions]
     gold_cyphers = kwargs["gold_cypher"]
     graphs = [graph2conn[graph] for graph in kwargs["graph"]]
-    async def accurate_cypher_async_inner(completion, gold_cypher, graph):
-        executable_score = await execution_accuracy(completion, gold_cypher, graph)
-        return 3.0 if executable_score > 0 else -3.0
     futures = []
-    for completion, gold_cypher, graph in zip(completions, gold_cyphers, graphs):
-        futures.append(accurate_cypher_async_inner(completion, gold_cypher, graph))
+    for completion, gold_cypher, graph in zip(content, gold_cyphers, graphs):
+        futures.append(execution_score(completion, gold_cypher, graph))
     scores = await asyncio.gather(*futures)
     return scores
 
@@ -108,10 +104,12 @@ async def run_query(driver: neo4j.AsyncDriver, cypher, timeout):
 
         return records
 
-async def execution_accuracy(pred_cypher, target_cypher, driver, timeout=10):
+async def execution_score(pred_cypher, target_cypher, driver, timeout=20):
+    # 2 if accurate (and therefore valid syntax)
+    # -1 if valid syntax but inaccurate
+    # -2 if invalid syntax (and therefore inaccurate), or db error
     if pred_cypher.strip() == target_cypher.strip():
-        return 1.0
-
+        return 2.0
     try:
         target_records, pred_records = await asyncio.gather(
             run_query(driver, target_cypher, timeout),
@@ -123,24 +121,25 @@ async def execution_accuracy(pred_cypher, target_cypher, driver, timeout=10):
         neo4j.exceptions.CypherTypeError,
         neo4j.exceptions.ClientError,
     ):
-        return 0.0
+        return -2.0  # Invalid and inaccurate
     except TypeError:
-        return 0.0
+        return -1.0  # Executable, not accurate
     except Exception as e:
         print(f"Warning: {e} while executing: {pred_cypher}")
-        return 0.0
+        return -2.0
 
+    target_executed = [{k: to_hashable(v) for k, v in record.items()} for record in target_records]
     try:
         pred_executed = [{k: to_hashable(v) for k, v in record.items()} for record in pred_records]
-        target_executed = [{k: to_hashable(v) for k, v in record.items()} for record in target_records]
     except TypeError:
-        return 0.0
+        return -1.0
 
-    return _compare_execution(
+    equal = _compare_execution(
         pred_executed=pred_executed,
         target_executed=target_executed,
         order_matters="order by" in target_cypher.lower()
     )
+    return 2.0 if equal > 0 else -1.0
 
 
 
@@ -159,10 +158,6 @@ maximum_length = len(tokenizer.apply_chat_template(
 ))
 
 print(f"Maximum prompt length: {maximum_length}")
-print("\nDataset sample:")
-print(dataset[0])
-print("\nPrompt:")
-print(dataset[0]["prompt"])
 
 max_completion_length = max_seq_length - (maximum_length + 1)
 
@@ -189,11 +184,11 @@ training_args = GRPOConfig(
 
 # ---- Trainer ----
 trainer = GRPOTrainer(
-    model=model,
+    model=model, # type: ignore
     processing_class=tokenizer,
-    reward_funcs=[accurate_cypher],
+    reward_funcs=[accurate_cypher], # type: ignore
     args=training_args,
-    train_dataset=dataset,
+    train_dataset=dataset, # type: ignore
 )
 
 # ---- Train ----
