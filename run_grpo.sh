@@ -8,7 +8,7 @@
 #SBATCH --constraint=J
 #SBATCH --mem=128G
 #SBATCH --gres=gpu:1
-#SBATCH --signal=B:TERM@60
+#SBATCH --signal=B:TERM@300
 
 max_restarts=400      # tweak this number to fit your needs
 scontext=$(scontrol show job ${SLURM_JOB_ID})
@@ -26,8 +26,7 @@ term_handler()
     if [[ $restarts -lt $max_restarts ]];then
         # Copy the log file because it will be overwriten
         echo "Requeueing!"
-        cp -v "${outfile}" "${outfile}.${restarts}"
-        cp "${outfile}" "${outfile%.out}_${restarts}.out"
+        cp -v "${outfile}" "${outfile%.out}_${restarts}.out"
         scontrol requeue ${SLURM_JOB_ID}
         exit 0
     else
@@ -52,5 +51,5 @@ cd ~/cypher-finetune
 source .venv/bin/activate
 python wait_until_train_db_up.py
 # If we reach timeout before run ends, wait returns immediately, goes into trap
-RUN_NAME=requeuetest python grpo.py &
+RUN_NAME=mainrun python grpo.py &
 wait $!
