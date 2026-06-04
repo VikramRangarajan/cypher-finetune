@@ -7,11 +7,13 @@ import signal
 from pathlib import Path
 import wandb
 import os
-import asyncio
+from concurrent.futures import ThreadPoolExecutor
+import threading
+import neo4j
 
 sys.path.insert(0, str(Path.home() / "cypherbench"))
 from cypherbench.neo4j_connector import Neo4jConnector
-from cypherbench.metrics.execution_accuracy import execution_accuracy
+from cypherbench.metrics.execution_accuracy import execution_accuracy, to_hashable, _compare_execution
 from cypherbench.metrics.executable import executable
 
 max_seq_length = 4096 # Can increase for longer reasoning traces
@@ -120,35 +122,62 @@ import numpy as np
 
 PRINTER = 0
 
+_EXECUTOR = ThreadPoolExecutor(max_workers=16)
+_TARGET_CACHE = {}
+_TARGET_CACHE_LOCK = threading.Lock()
+
+def _get_cached_target(gold_cypher, graph_name):
+    key = (gold_cypher, graph_name)
+    with _TARGET_CACHE_LOCK:
+        if key not in _TARGET_CACHE:
+            graph = graph2conn[graph_name]
+            _TARGET_CACHE[key] = [
+                {k: to_hashable(v) for k, v in record.items()}
+                for record in graph.run_query(gold_cypher)
+            ]
+    return _TARGET_CACHE[key]
+
 def valid_cypher(completions, **kwargs):
-    async def valid_cypher_async_inner(completion, graph):
-        response = completion[0]["content"]
+    def _check(i):
+        response = completions[i][0]["content"]
+        graph = graph2conn[kwargs["graph"][i]]
         executable_score = executable(response, None, graph)
         return 1.0 if executable_score > 0 else -1.0
-    futures = []
-    for i, completion in enumerate(completions):
-        futures.append(valid_cypher_async_inner(completion, graph2conn[kwargs["graph"][i]]))
 
-    async def _run():
-        scores = await asyncio.gather(*futures)
-        return scores
-    scores = asyncio.run(_run())
-    return scores
+    futures = [_EXECUTOR.submit(_check, i) for i in range(len(completions))]
+    return [f.result() for f in futures]
 
 
 def accurate_cypher(completions, **kwargs):
-    async def accurate_cypher_async_inner(completion, gold_cypher, graph):
-        response = completion[0]["content"]
-        executable_score = execution_accuracy(response, gold_cypher, graph)
-        return 3.0 if executable_score > 0 else -3.0
-    futures = []
-    for i, completion in enumerate(completions):
-        futures.append(accurate_cypher_async_inner(completion, kwargs["gold_cypher"][i], graph2conn[kwargs["graph"][i]]))
-    async def _run():
-        scores = await asyncio.gather(*futures)
-        return scores
-    scores = asyncio.run(_run())
-    return scores
+    def _check(i):
+        response = completions[i][0]["content"]
+        graph = graph2conn[kwargs["graph"][i]]
+        gold_cypher = kwargs["gold_cypher"][i]
+        graph_name = kwargs["graph"][i]
+
+        target_executed = _get_cached_target(gold_cypher, graph_name)
+
+        try:
+            pred_executed = graph.run_query(response, timeout=120)
+            pred_executed = [{k: to_hashable(v) for k, v in record.items()} for record in pred_executed]
+        except (
+            neo4j.exceptions.CypherSyntaxError,
+            neo4j.exceptions.DatabaseError,
+            neo4j.exceptions.CypherTypeError,
+            neo4j.exceptions.ClientError,
+        ):
+            return -3.0
+        except TypeError:
+            return -3.0
+        except Exception as e:
+            print(f"Warning: Exception {e} occurred while executing {response}")
+            return -3.0
+
+        result = _compare_execution(pred_executed, target_executed, 'order by' in gold_cypher.lower())
+        return 3.0 if result > 0 else -3.0
+
+    futures = [_EXECUTOR.submit(_check, i) for i in range(len(completions))]
+    return [f.result() for f in futures]
 
 """# Dataset Preparation
 
@@ -201,7 +230,7 @@ training_args = GRPOConfig(
     max_completion_length = max_completion_length,
     num_train_epochs = 1, # Set to 1 for a full training run
     # max_steps = 2000,
-    save_steps = 5,
+    save_steps = 50,
     # enable_jit_checkpoint=True,
     report_to = "none" if run_name == "DBG" else "wandb", # Can use Weights & Biases, TrackIO
     run_name = run_name,
