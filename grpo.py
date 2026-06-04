@@ -201,7 +201,7 @@ training_args = GRPOConfig(
     max_completion_length = max_completion_length,
     num_train_epochs = 1, # Set to 1 for a full training run
     # max_steps = 2000,
-    save_steps = 5,
+    save_steps = 50,
     # enable_jit_checkpoint=True,
     report_to = "none" if run_name == "DBG" else "wandb", # Can use Weights & Biases, TrackIO
     run_name = run_name,
