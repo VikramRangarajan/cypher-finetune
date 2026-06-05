@@ -5,19 +5,42 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
-    "datasets>=4.8.5",
-    "pydantic-settings>=2.14.1",
-    "trl>=1.4.0",
-    "wandb>=0.27.0",
-    "peft>=0.10.0",
-    "bitsandbytes>=0.42.0",
-    "pillow>=12.2.0",
-    "torch==2.8.*",
-    "torchvision>=0.23.0",
-    "vllm>=0.11.0",
-    "langchain>=1.3.1",
-    "langchain-neo4j>=0.9.0",
+    "datasets==4.8.*",
+    "pydantic-settings",
+    "trl==1.5.*",
+    "peft",
+    "bitsandbytes",
+    "pillow",
+    "torch",
+    "torchvision",
+    "langchain",
+    "trackio[gpu]==0.26.*",
+    "transformers==5.10.*",
+    "cypherbench",
 ]
 
+[tool.uv.sources]
+cypherbench = { git = "https://github.com/VikramRangarajan/cypherbench.git" }
+torch = [
+    { index = "pytorch-cu129" },
+]
+torchvision = [
+    { index = "pytorch-cu129" },
+]
+
+[[tool.uv.index]]
+name = "pytorch-cu129"
+url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
 [tool.pyrefly]
-search-path = [ "../cypherbench" ]
+project-includes = [
+    "**/*.py*",
+    "**/*.ipynb",
+]
+
+[dependency-groups]
+dev = [
+    "pyrefly>=1.0.0",
+    "ruff>=0.9.10",
+]

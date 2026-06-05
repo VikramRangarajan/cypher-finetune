@@ -123,7 +123,7 @@ PRINTER = 0
 def valid_cypher(completions, **kwargs):
     async def valid_cypher_async_inner(completion, graph):
         response = completion[0]["content"]
-        executable_score = executable(response, None, graph)
+        executable_score = executable(response, None, graph, 20)
         return 1.0 if executable_score > 0 else -1.0
     futures = []
     for i, completion in enumerate(completions):
@@ -139,7 +139,7 @@ def valid_cypher(completions, **kwargs):
 def accurate_cypher(completions, **kwargs):
     async def accurate_cypher_async_inner(completion, gold_cypher, graph):
         response = completion[0]["content"]
-        executable_score = execution_accuracy(response, gold_cypher, graph)
+        executable_score = execution_accuracy(response, gold_cypher, graph, 40)
         return 3.0 if executable_score > 0 else -3.0
     futures = []
     for i, completion in enumerate(completions):

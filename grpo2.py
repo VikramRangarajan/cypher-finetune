@@ -1,13 +1,9 @@
 import json
-import torch
-import sys
 import os
 import asyncio
 from pathlib import Path
 import neo4j
 import neo4j.exceptions
-
-sys.path.insert(0, str(Path.home() / "cypherbench"))
 from cypherbench.metrics.execution_accuracy import to_hashable, _compare_execution
 from cypherbench.schema import PropertyGraphSchema, DataType
 
@@ -16,6 +12,26 @@ from peft import get_peft_model, LoraConfig
 from datasets import load_dataset
 from trl import GRPOConfig, GRPOTrainer
 from safetensors import safe_open
+import trackio
+import warnings
+from neo4j import PreviewWarning
+
+from trl.extras.profiling import ProfilingContext
+
+def _log_metrics(self, duration: float) -> None:
+    if not self.is_main_process:
+        return
+
+    prefix = self.metric_prefix if self.metric_prefix != "profiling/Time taken" else "profiling/"
+    name = self.name.split(".")[-1]
+    metric_name = f"{prefix}{name}"
+    metrics = {metric_name: duration, "train/global_step": self.step}
+    if "trackio" in self.report_to:
+        trackio.log(metrics)
+
+ProfilingContext._log_metrics = _log_metrics
+
+warnings.filterwarnings("ignore", category=PreviewWarning)
 
 max_seq_length = 4096
 lora_rank = 32
@@ -34,21 +50,32 @@ train_graphs = neo4j_info["train_domains"]
 
 graph2conn = {}
 for graph in train_graphs:
-    info = neo4j_info['full'][graph]
+    info = neo4j_info["full"][graph]
     uri = f"bolt://{info['host']}:{info['port']}"
-    auth = (info['username'], info['password'])
-    driver = neo4j.AsyncGraphDatabase.driver(uri=uri, auth=auth, max_connection_pool_size=100, warn_notification_severity="OFF")
+    auth = (info["username"], info["password"])
+    driver = neo4j.AsyncGraphDatabase.driver(
+        uri=uri,
+        auth=auth,
+        max_connection_pool_size=100,
+        warn_notification_severity="OFF",
+        notifications_min_severity="OFF"
+    )
     graph2conn[graph] = driver
-
 
 
 graph2schema = {}
 for graph in train_graphs:
-    path = Path.home() / "cypherbench" / "benchmark" / "graphs" / "schemas" / f"{graph}_schema.json"
+    path = (
+        Path.home()
+        / "cypherbench"
+        / "benchmark"
+        / "graphs"
+        / "schemas"
+        / f"{graph}_schema.json"
+    )
     with open(path) as fin:
         schema = PropertyGraphSchema.from_json(
-            json.load(fin),
-            add_meta_properties={"name": DataType.STR}
+            json.load(fin), add_meta_properties={"name": DataType.STR}
         ).to_sorted()
     graph2schema[graph] = schema.to_str(exclude_description=True)
 
@@ -65,12 +92,7 @@ Graph Schema:
 Question: {question}
 Cypher: """
 
-
-model = AutoModelForCausalLM.from_pretrained(
-    "google/gemma-4-E2B-it",
-    torch_dtype=torch.bfloat16,
-    device_map="auto",
-)
+model = AutoModelForCausalLM.from_pretrained("google/gemma-4-E2B-it", device_map="auto")
 
 tokenizer = AutoTokenizer.from_pretrained("google/gemma-4-E2B-it")
 assert tokenizer is not None
@@ -78,10 +100,6 @@ assert tokenizer is not None
 lora_config = LoraConfig(
     r=lora_rank,
     lora_alpha=lora_rank * 2,
-    target_modules=[
-        "q_proj", "k_proj", "v_proj", "o_proj",
-        "gate_proj", "up_proj", "down_proj",
-    ],
     exclude_modules=["vision_tower", "audio_tower"],
 )
 model = get_peft_model(model, lora_config)
@@ -97,6 +115,7 @@ async def accurate_cypher(completions, **kwargs):
     scores = await asyncio.gather(*futures)
     return scores
 
+
 async def run_query(driver: neo4j.AsyncDriver, cypher, timeout):
     async with driver.session(database="neo4j") as session:
         result = await session.run(neo4j.Query(cypher, timeout=timeout))
@@ -104,7 +123,8 @@ async def run_query(driver: neo4j.AsyncDriver, cypher, timeout):
 
         return records
 
-async def execution_score(pred_cypher, target_cypher, driver, timeout=20):
+
+async def execution_score(pred_cypher, target_cypher, driver, timeout=30):
     # 2 if accurate (and therefore valid syntax)
     # -1 if valid syntax but inaccurate
     # -2 if invalid syntax (and therefore inaccurate), or db error
@@ -120,7 +140,9 @@ async def execution_score(pred_cypher, target_cypher, driver, timeout=20):
         neo4j.exceptions.DatabaseError,
         neo4j.exceptions.CypherTypeError,
         neo4j.exceptions.ClientError,
-    ):
+    ) as e:
+        if "TimedOut" in e.code: # type: ignore
+            return None
         return -2.0  # Invalid and inaccurate
     except TypeError:
         return -1.0  # Executable, not accurate
@@ -128,54 +150,70 @@ async def execution_score(pred_cypher, target_cypher, driver, timeout=20):
         print(f"Warning: {e} while executing: {pred_cypher}")
         return -2.0
 
-    target_executed = [{k: to_hashable(v) for k, v in record.items()} for record in target_records]
+    target_executed = [
+        {k: to_hashable(v) for k, v in record.items()} for record in target_records
+    ]
     try:
-        pred_executed = [{k: to_hashable(v) for k, v in record.items()} for record in pred_records]
+        pred_executed = [
+            {k: to_hashable(v) for k, v in record.items()} for record in pred_records
+        ]
     except TypeError:
         return -1.0
 
     equal = _compare_execution(
         pred_executed=pred_executed,
         target_executed=target_executed,
-        order_matters="order by" in target_cypher.lower()
+        order_matters="order by" in target_cypher.lower(),
     )
     return 2.0 if equal > 0 else -1.0
 
 
-
 dataset = load_dataset("megagonlabs/cypherbench", split="train")
 
+
 def format_prompt(sample):
-    content = PROMPT_TEMPLATE.format(schema=graph2schema[sample["graph"]], question=sample["nl_question"])
+    content = PROMPT_TEMPLATE.format(
+        schema=graph2schema[sample["graph"]], question=sample["nl_question"]
+    )
     return [{"role": "user", "content": content}]
+
 
 dataset = dataset.map(lambda x: {"prompt": format_prompt(x)})
 
-prompt_template_example = PROMPT_TEMPLATE.format(schema=graph2schema["biology"], question="Sample question?")
-maximum_length = len(tokenizer.apply_chat_template(
-    [{"role": "user", "content": prompt_template_example}],
-    add_generation_prompt=True
-))
+prompt_template_example = PROMPT_TEMPLATE.format(
+    schema=graph2schema["biology"], question="Sample question?"
+)
+maximum_length = len(
+    tokenizer.apply_chat_template(
+        [{"role": "user", "content": prompt_template_example}],
+        add_generation_prompt=True,
+    )
+)
 
 print(f"Maximum prompt length: {maximum_length}")
 
 max_completion_length = max_seq_length - (maximum_length + 1)
 
 
+space_id = "VikramR/text2cypher-grpo-2" if run_name != "DBG" else None
+
 training_args = GRPOConfig(
     learning_rate=1e-5,
     optim="adamw_8bit",
-    logging_steps=10,
+    logging_steps=1,
     per_device_train_batch_size=2,
     gradient_accumulation_steps=4,
     num_generations=2,
     max_completion_length=max_completion_length,
+    torch_compile=True,
     num_train_epochs=1,
     save_steps=50,
     report_to="none" if run_name == "DBG" else "trackio",
+    trackio_space_id=space_id,
     run_name=run_name,
     output_dir=str(Path("output") / run_name),
     hub_strategy="checkpoint",
+    push_to_hub=True,
     loss_type="dapo",
     mask_truncated_completions=True,
     gradient_checkpointing=True,
@@ -184,26 +222,22 @@ training_args = GRPOConfig(
 
 # ---- Trainer ----
 trainer = GRPOTrainer(
-    model=model, # type: ignore
+    model=model,  # type: ignore
     processing_class=tokenizer,
-    reward_funcs=[accurate_cypher], # type: ignore
+    reward_funcs=[accurate_cypher],  # type: ignore
     args=training_args,
-    train_dataset=dataset, # type: ignore
+    train_dataset=dataset,  # type: ignore
 )
 
 # ---- Train ----
 resume = True if "TRAINER_RESUME" in os.environ else None
 trainer.train(resume_from_checkpoint=resume)
 
-# ---- Save final & push to hub ----
-model.save_pretrained(f"output/{run_name}_final")
-tokenizer.save_pretrained(f"output/{run_name}_final")
-model.push_to_hub(f"{hub_org}/{run_name}_final")
-tokenizer.push_to_hub(f"{hub_org}/{run_name}_final")
-
 # ---- Verify LoRA is trained (skip vision/audio tower params) ----
 tensors = {}
-with safe_open(f"output/{run_name}_final/adapter_model.safetensors", framework="pt") as f:
+with safe_open(
+    f"output/{run_name}/final/adapter_model.safetensors", framework="pt"
+) as f:
     for key in f.keys():
         if "audio_tower" in key or "vision_tower" in key:
             continue
