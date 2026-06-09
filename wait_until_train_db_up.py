@@ -4,27 +4,30 @@ import json
 from tabulate import tabulate
 import sys
 from pathlib import Path
+
 sys.path.insert(0, str(Path.home() / "cypherbench"))
 from cypherbench.neo4j_connector import Neo4jConnector
 
 graph2rels = {
-    'art': 1339479,
-    'biology': 7513599,
-    'company': 299581,
-    'fictional_character': 40548,
-    'flight_accident': 2212,
-    'geography': 903794,
-    'movie': 1892202,
-    'nba': 18991,
-    'politics': 1548416,
-    'soccer': 1119766,
-    'terrorist_attack': 1525
+    "art": 1339479,
+    "biology": 7513599,
+    "company": 299581,
+    "fictional_character": 40548,
+    "flight_accident": 2212,
+    "geography": 903794,
+    "movie": 1892202,
+    "nba": 18991,
+    "politics": 1548416,
+    "soccer": 1119766,
+    "terrorist_attack": 1525,
 }
 
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--neo4j_info', default=Path.home() / 'cypherbench' / 'neo4j_info.json')
+    parser.add_argument(
+        "--neo4j_info", default=Path.home() / "cypherbench" / "neo4j_info.json"
+    )
     args = parser.parse_args()
     print(args)
     print()
@@ -35,50 +38,62 @@ def main():
     is_train_ready = True
     is_test_ready = True
     df = []
-    for graph, info in tqdm(neo4j_info['full'].items(), desc='Connecting to Neo4j',
-                            total=len(neo4j_info['full'])):
-        connection, num_entities, num_relations = 'N', float('nan'), float('nan')
+    for graph, info in tqdm(
+        neo4j_info["full"].items(),
+        desc="Connecting to Neo4j",
+        total=len(neo4j_info["full"]),
+    ):
+        connection, num_entities, num_relations = "N", float("nan"), float("nan")
         try:
             neo4j_conn = Neo4jConnector(name=graph, **info)
-            connection = 'Y'
+            connection = "Y"
             num_entities = neo4j_conn.get_num_entities()
             num_relations = neo4j_conn.get_num_relations()
-        except Exception as e:
+        except Exception as _:
             pass
 
         if num_relations != graph2rels[graph]:
-            if graph in neo4j_info['train_domains']:
+            if graph in neo4j_info["train_domains"]:
                 is_train_ready = False
             else:
                 is_test_ready = False
-        df.append((
-            graph,
-            f'{info["host"]}:{info["port"]}',
-            connection,
-            num_entities,
-            num_relations,
-            'Y' if num_relations == graph2rels[graph] else 'N'
-        ))
+        df.append(
+            (
+                graph,
+                f"{info['host']}:{info['port']}",
+                connection,
+                num_entities,
+                num_relations,
+                "Y" if num_relations == graph2rels[graph] else "N",
+            )
+        )
 
     print()
-    print(tabulate(df, headers=['Graph', 'URL', 'Connection?', 'Entities', 'Relations', 'Ready?'], tablefmt='github',
-                   floatfmt='.0f'))
+    print(
+        tabulate(
+            df,
+            headers=["Graph", "URL", "Connection?", "Entities", "Relations", "Ready?"],
+            tablefmt="github",
+            floatfmt=".0f",
+        )
+    )
 
     print()
     if is_train_ready:
-        print('All training graphs are ready!')
+        print("All training graphs are ready!")
         exit(0)
     else:
-        print('Warning: At least one training graph is not ready!')
+        print("Warning: At least one training graph is not ready!")
 
     if is_test_ready:
-        print('All testing graphs are ready!')
+        print("All testing graphs are ready!")
     else:
-        print('Warning: At least one testing graph is not ready!')
+        print("Warning: At least one testing graph is not ready!")
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     from time import sleep
+
     while True:
         main()
         sleep(10)

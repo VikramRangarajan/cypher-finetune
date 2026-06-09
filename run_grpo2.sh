@@ -41,14 +41,14 @@ trap 'term_handler' SIGTERM
 . ~/.bashrc
 module purge
 
-if [ "${SLURM_RESTART_COUNT:-0}" -gt 0 ]; then
-    export TRAINER_RESUME=1
-fi
+# if [ "${SLURM_RESTART_COUNT:-0}" -gt 0 ]; then
+export TRAINER_RESUME=1
+# fi
 
 cd ~/cypherbench/docker
 bash start_neo4j_train_apptainer.sh
 cd ~/cypher-finetune
 uv run wait_until_train_db_up.py
 # If we reach timeout before run ends, wait returns immediately, goes into trap
-RUN_NAME=text2cypher-grpo uv run grpo2.py &
+RUN_NAME=cypherbench-grpo-2 uv run grpo2.py &
 wait $!

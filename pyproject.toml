@@ -17,6 +17,7 @@ dependencies = [
     "trackio[gpu]==0.26.*",
     "transformers==5.10.*",
     "cypherbench",
+    "torchao==0.17.*",
 ]
 
 [tool.uv.sources]
@@ -38,9 +39,17 @@ project-includes = [
     "**/*.py*",
     "**/*.ipynb",
 ]
+project-excludes = ["grpo.py"]
 
 [dependency-groups]
 dev = [
     "pyrefly>=1.0.0",
     "ruff>=0.9.10",
+]
+
+[tool.ruff]
+extend-exclude = [
+    "grpo.py",
+    "train.py",
+    "eval.py",
 ]
