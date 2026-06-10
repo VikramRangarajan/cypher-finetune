@@ -7,7 +7,7 @@
 
 #SBATCH --constraint=J
 #SBATCH --mem=128G
-#SBATCH --gres=gpu:1
+#SBATCH --gres=gpu:2
 #SBATCH --signal=B:TERM@300
 
 max_restarts=400      # tweak this number to fit your needs
@@ -41,14 +41,14 @@ trap 'term_handler' SIGTERM
 . ~/.bashrc
 module purge
 
-# if [ "${SLURM_RESTART_COUNT:-0}" -gt 0 ]; then
+if [ "${SLURM_RESTART_COUNT:-0}" -gt 0 ]; then
 export TRAINER_RESUME=1
-# fi
+fi
 
 cd ~/cypherbench/docker
 bash start_neo4j_train_apptainer.sh
 cd ~/cypher-finetune
 uv run wait_until_train_db_up.py
 # If we reach timeout before run ends, wait returns immediately, goes into trap
-RUN_NAME=cypherbench-grpo-2 uv run grpo2.py &
+RUN_NAME=cypherbench-grpo-4 uv run grpo2.py --lora_rank=null --per_device_train_batch_size=2 --gradient_accumulation_steps=64 --num_generations=8 --steps_per_generation=32 &
 wait $!

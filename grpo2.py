@@ -45,6 +45,11 @@ warnings.filterwarnings("ignore", category=PreviewWarning)
 class HParams(BaseSettings, cli_parse_args=True):
     max_seq_length: int = 2048
     lora_rank: int | None = 32
+    per_device_train_batch_size: int = 2
+    gradient_accumulation_steps: int = 8
+    num_generations: int = 2
+    steps_per_generation: int = 8
+    learning_rate: float = 1e-5
 
 
 hparams = HParams()
@@ -109,7 +114,7 @@ Graph Schema:
 Question: {question}
 Cypher: """
 
-model = AutoModelForCausalLM.from_pretrained("google/gemma-4-E2B-it", device_map="auto")
+model = AutoModelForCausalLM.from_pretrained("google/gemma-4-E2B-it")
 
 tokenizer = AutoTokenizer.from_pretrained("google/gemma-4-E2B-it")
 assert tokenizer is not None
@@ -154,7 +159,7 @@ async def run_query(driver: neo4j.AsyncDriver, cypher, timeout):
         return records
 
 
-async def execution_score(pred_cypher, target_cypher, driver, timeout=30):
+async def execution_score(pred_cypher, target_cypher, driver, timeout=60):
     # +2 if accurate (and therefore valid syntax)
     # -2 if invalid syntax (and therefore inaccurate), or db error
     # If executable but inaccurate, return psjs - 1.0 (-2 to 0 scale)
@@ -245,12 +250,13 @@ max_completion_length = max_seq_length - (maximum_length + 1)
 space_id = f"VikramR/{run_name}_space" if run_name != "DBG" else None
 
 training_args = GRPOConfig(
-    learning_rate=1e-6,
+    learning_rate=hparams.learning_rate,
     optim="adamw_torch_8bit" if lora_rank is None else "adamw_8bit",
     logging_steps=1,
-    per_device_train_batch_size=2,
-    gradient_accumulation_steps=8,
-    num_generations=2,
+    per_device_train_batch_size=hparams.per_device_train_batch_size,
+    gradient_accumulation_steps=hparams.gradient_accumulation_steps,
+    num_generations=hparams.num_generations,
+    steps_per_generation=hparams.steps_per_generation,
     max_completion_length=max_completion_length,
     # torch_compile=True,
     num_train_epochs=1,
@@ -281,15 +287,16 @@ resume = True if "TRAINER_RESUME" in os.environ else None
 trainer.train(resume_from_checkpoint=resume)
 
 # ---- Verify LoRA is trained (skip vision/audio tower params) ----
-tensors = {}
-with safe_open(
-    f"output/{run_name}/final/adapter_model.safetensors", framework="pt"
-) as f:
-    for key in f.keys():
-        if "audio_tower" in key or "vision_tower" in key:
-            continue
-        tensor = f.get_tensor(key)
-        n_zeros = (tensor == 0).sum()
-        assert n_zeros.item() != tensor.numel(), f"Parameter {key} is all zeros"
+if hparams.lora_rank is not None:
+    tensors = {}
+    with safe_open(
+        f"output/{run_name}/adapter_model.safetensors", framework="pt"
+    ) as f:
+        for key in f.keys():
+            if "audio_tower" in key or "vision_tower" in key:
+                continue
+            tensor = f.get_tensor(key)
+            n_zeros = (tensor == 0).sum()
+            assert n_zeros.item() != tensor.numel(), f"Parameter {key} is all zeros"
 
-print("LoRA verification passed: all tracked parameters have been updated.")
+    print("LoRA verification passed: all tracked parameters have been updated.")
