@@ -21,9 +21,20 @@ def run_query(driver: neo4j.Driver, cypher, timeout=None):
         records = result.data()
         return records
 
+def save_cache(cache):
+    with open(CACHE_PATH, "wb") as f:
+        pickle.dump(cache, f)
+
+def load_cache():
+    if not CACHE_PATH.exists():
+        return {}
+    with open(CACHE_PATH, "rb") as f:
+        cache = pickle.load(f)
+    return cache
 
 def generate_cache():
     ds = datasets.load_dataset("megagonlabs/cypherbench", split="train")
+    print(ds)
 
     with open(Path.home() / "cypherbench" / "neo4j_info.json") as fin:
         neo4j_info = json.load(fin)
@@ -41,12 +52,15 @@ def generate_cache():
         graph2conn[graph] = driver
 
     query_results = {}
+    current_cache = load_cache()
 
-    with ThreadPoolExecutor(max_workers=16) as executor:
+    with ThreadPoolExecutor(max_workers=128) as executor:
         future_pairs = []
 
         for row in ds:
             gold_cypher: str = row["gold_cypher"]  # type: ignore
+            if gold_cypher in current_cache:
+                continue # skip queries already in cache
             ps_cypher = get_ps_cypher(gold_cypher)
             graph: str = row["graph"]  # type: ignore
             driver = graph2conn[graph]
@@ -56,14 +70,15 @@ def generate_cache():
 
             future_pairs.append((gold_cypher, ps_cypher, gold_future, ps_future))
 
-        for gold_cypher, ps_cypher, gold_future, ps_future in tqdm(future_pairs):
+        for i, (gold_cypher, ps_cypher, gold_future, ps_future) in tqdm(enumerate(future_pairs)):
             query_results[gold_cypher] = {
                 "gold_result": gold_future.result(),
                 "gold_ps_result": ps_future.result(),
             }
+            if i % 100 == 0:
+                save_cache(query_results)
+        save_cache(query_results)
 
-    with open(CACHE_PATH, "wb") as f:
-        pickle.dump(query_results, f)
 
 
 def get_cache() -> dict[str, dict[str, list[dict[str, Any]]]]:
@@ -71,9 +86,10 @@ def get_cache() -> dict[str, dict[str, list[dict[str, Any]]]]:
         print("Training dataset query cache not found. Generating now.")
         generate_cache()
         print("Done generating training query cache.")
-    with open(CACHE_PATH, "rb") as f:
-        cached_queries = pickle.load(f)
-    return cached_queries
+    cache = load_cache()
+    if len(cache) != 8534:
+        generate_cache()
+    return load_cache()
 
 
 if __name__ == "__main__":
