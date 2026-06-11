@@ -10,6 +10,8 @@ Also, clone and run `uv sync` on [my fork of cypherbench](https://github.com/Vik
 
 To train with GRPO, you must set `CYPHERBENCH_DIR` environment variable to wherever you cloned the repo (defaults to `~/cypherbench`). You then need to start the cypherbench train databases before running `RUN_NAME=YourRunName HUB_ORG=YourHFHubOrg uv run grpo2.py`
 
+You can also do `uv run query_cache.py` to prerun all the training dataset queries ahead of time. Otherwise, it will do it before starting the training run. Note that this also needs the train databases to be up.
+
 You can use `uv run wait_until_train_db_up.py` script to wait until the train databases are ready for training, then start `grpo2.py`.
 
 # Features

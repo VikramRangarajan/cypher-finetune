@@ -2,9 +2,15 @@ import datasets
 import neo4j
 from concurrent.futures import ThreadPoolExecutor
 from cypherbench.metrics.provenance_subgraph_jaccard_similarity import get_ps_cypher
+import pickle
 from tqdm import tqdm
 from pathlib import Path
 import json
+import os
+from typing import Any
+
+CYPHERBENCH_DIR = Path(os.environ.get("CYPHERBENCH_DIR", Path.home() / "cypherbench"))
+CACHE_PATH = CYPHERBENCH_DIR / "benchmark" / "train_cache.pkl"
 
 
 def run_query(driver: neo4j.Driver, cypher, timeout=None):
@@ -34,26 +40,41 @@ def generate_cache():
         )
         graph2conn[graph] = driver
 
-    paired_results = []
+    query_results = {}
 
     with ThreadPoolExecutor(max_workers=16) as executor:
         future_pairs = []
 
         for row in ds:
-            gold_cypher = row["gold_cypher"]  # type: ignore
+            gold_cypher: str = row["gold_cypher"]  # type: ignore
             ps_cypher = get_ps_cypher(gold_cypher)
-            graph = row["graph"]  # type: ignore
+            graph: str = row["graph"]  # type: ignore
             driver = graph2conn[graph]
 
             gold_future = executor.submit(run_query, driver, gold_cypher)
             ps_future = executor.submit(run_query, driver, ps_cypher)
 
-            future_pairs.append((gold_future, ps_future))
+            future_pairs.append((gold_cypher, ps_cypher, gold_future, ps_future))
 
-        for gold_future, ps_future in tqdm(future_pairs):
-            paired_results.append(
-                (
-                    gold_future.result(),
-                    ps_future.result(),
-                )
-            )
+        for gold_cypher, ps_cypher, gold_future, ps_future in tqdm(future_pairs):
+            query_results[gold_cypher] = {
+                "gold_result": gold_future.result(),
+                "gold_ps_result": ps_future.result(),
+            }
+
+    with open(CACHE_PATH, "wb") as f:
+        pickle.dump(query_results, f)
+
+
+def get_cache() -> dict[str, dict[str, list[dict[str, Any]]]]:
+    if not CACHE_PATH.exists():
+        print("Training dataset query cache not found. Generating now.")
+        generate_cache()
+        print("Done generating training query cache.")
+    with open(CACHE_PATH, "rb") as f:
+        cached_queries = pickle.load(f)
+    return cached_queries
+
+
+if __name__ == "__main__":
+    get_cache()
