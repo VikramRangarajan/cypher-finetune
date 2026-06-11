@@ -58,14 +58,16 @@ print("Hparams", hparams)
 max_seq_length = hparams.max_seq_length
 lora_rank = hparams.lora_rank
 run_name = os.environ["RUN_NAME"]
-hub_org = "VikramR"
+hub_org = os.environ["HUB_ORG"] if run_name != "DBG" else None
 
 if "TRAINER_RESUME" in os.environ:
     print("Resuming from trainer checkpoint")
 print("TrackIO run name:", run_name)
 
+CYPHERBENCH_DIR = Path(os.environ.get("CYPHERBENCH_DIR", Path.home() / "cypherbench"))
+
 # ---- Neo4j connections ----
-with open(Path.home() / "cypherbench" / "neo4j_info.json") as fin:
+with open(CYPHERBENCH_DIR / "neo4j_info.json") as fin:
     neo4j_info = json.load(fin)
 
 train_graphs = neo4j_info["train_domains"]
@@ -87,14 +89,7 @@ for graph in train_graphs:
 
 graph2schema = {}
 for graph in train_graphs:
-    path = (
-        Path.home()
-        / "cypherbench"
-        / "benchmark"
-        / "graphs"
-        / "schemas"
-        / f"{graph}_schema.json"
-    )
+    path = CYPHERBENCH_DIR / "benchmark" / "graphs" / "schemas" / f"{graph}_schema.json"
     with open(path) as fin:
         schema = PropertyGraphSchema.from_json(
             json.load(fin), add_meta_properties={"name": DataType.STR}
@@ -247,7 +242,7 @@ print(f"Maximum prompt length: {maximum_length}")
 max_completion_length = max_seq_length - (maximum_length + 1)
 
 
-space_id = f"VikramR/{run_name}_space" if run_name != "DBG" else None
+space_id = f"{hub_org}/{run_name}_space" if run_name != "DBG" else None
 
 training_args = GRPOConfig(
     learning_rate=hparams.learning_rate,
@@ -289,9 +284,7 @@ trainer.train(resume_from_checkpoint=resume)
 # ---- Verify LoRA is trained (skip vision/audio tower params) ----
 if hparams.lora_rank is not None:
     tensors = {}
-    with safe_open(
-        f"output/{run_name}/adapter_model.safetensors", framework="pt"
-    ) as f:
+    with safe_open(f"output/{run_name}/adapter_model.safetensors", framework="pt") as f:
         for key in f.keys():
             if "audio_tower" in key or "vision_tower" in key:
                 continue
