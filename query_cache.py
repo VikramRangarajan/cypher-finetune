@@ -7,7 +7,6 @@ from pathlib import Path
 import json
 
 
-
 def run_query(driver: neo4j.Driver, cypher, timeout=None):
     with driver.session(
         database="neo4j", default_access_mode=neo4j.READ_ACCESS
@@ -34,7 +33,7 @@ def generate_cache():
             uri=uri, auth=auth, max_connection_pool_size=100
         )
         graph2conn[graph] = driver
-        
+
     paired_results = []
 
     with ThreadPoolExecutor(max_workers=16) as executor:

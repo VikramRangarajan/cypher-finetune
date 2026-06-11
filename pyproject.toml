@@ -18,6 +18,7 @@ dependencies = [
     "transformers==5.10.*",
     "cypherbench",
     "torchao==0.17.*",
+    "types-tqdm>=4.68.0.20260608",
 ]
 
 [tool.uv.sources]
@@ -45,11 +46,4 @@ project-excludes = ["grpo.py"]
 dev = [
     "pyrefly>=1.0.0",
     "ruff>=0.9.10",
-]
-
-[tool.ruff]
-extend-exclude = [
-    "grpo.py",
-    "train.py",
-    "eval.py",
 ]
