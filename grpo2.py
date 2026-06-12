@@ -10,7 +10,7 @@ from cypherbench.metrics.provenance_subgraph_jaccard_similarity import get_ps_cy
 from cypherbench.schema import PropertyGraphSchema, DataType
 from query_cache import get_cache
 
-from transformers import AutoModelForCausalLM, AutoTokenizer
+from transformers import AutoModelForCausalLM, AutoProcessor
 from peft import get_peft_model, LoraConfig
 from datasets import load_dataset
 from trl import GRPOConfig, GRPOTrainer
@@ -122,7 +122,7 @@ Cypher: """
 
 model = AutoModelForCausalLM.from_pretrained("google/gemma-4-E2B-it")
 
-tokenizer = AutoTokenizer.from_pretrained("google/gemma-4-E2B-it")
+tokenizer = AutoProcessor.from_pretrained("google/gemma-4-E2B-it")
 assert tokenizer is not None
 
 if lora_rank is not None:
@@ -242,7 +242,8 @@ maximum_length = len(
     tokenizer.apply_chat_template(  # type: ignore
         [{"role": "user", "content": prompt_template_example}],
         add_generation_prompt=True,
-    )["input_ids"]
+        tokenize=True,
+    )[0]
 )
 
 print(f"Maximum prompt length: {maximum_length}")
