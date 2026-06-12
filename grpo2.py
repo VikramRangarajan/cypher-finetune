@@ -2,11 +2,12 @@ import json
 import os
 import asyncio
 from pathlib import Path
+from time import perf_counter
 import neo4j
 import neo4j.exceptions
 from cypherbench.metrics.execution_accuracy import to_hashable, _compare_execution
-from cypherbench.metrics.provenance_subgraph_jaccard_similarity import get_ps_cypher
 from cypherbench.schema import PropertyGraphSchema, DataType
+from query_cache import get_cache
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 from peft import get_peft_model, LoraConfig
@@ -96,6 +97,13 @@ for graph in train_graphs:
         ).to_sorted()
     graph2schema[graph] = schema.to_str(exclude_description=True)
 
+# Load the gold_cypher query results
+print("Loading gold cache")
+cache_load_time = perf_counter()
+gold_cypher_cache = get_cache()
+cache_load_time = perf_counter() - cache_load_time
+print(f"Done loading gold cache, {cache_load_time:.2f} seconds")
+
 # ---- Prompt template ----
 PROMPT_TEMPLATE = """Translate the question to Cypher query based on the schema of a Neo4j knowledge graph.
 - Output the Cypher query in a single line, without any additional output or explanation. Do not wrap the query with any formatting like ```.
@@ -157,45 +165,23 @@ async def run_query(driver: neo4j.AsyncDriver, cypher, timeout):
 async def execution_score(pred_cypher, target_cypher, driver, timeout=60):
     # +2 if accurate (and therefore valid syntax)
     # -2 if invalid syntax (and therefore inaccurate), or db error
-    # If executable but inaccurate, return psjs - 1.0 (-2 to 0 scale)
+    # If executable but inaccurate, return -1
     if pred_cypher.strip() == target_cypher.strip():
         return 2.0
 
-    # PSJS Setup
-    target_ps_cypher = get_ps_cypher(
-        target_cypher, node_element_id_only=True, return_var="elemId1"
-    )
-    pred_ps_cypher = get_ps_cypher(
-        pred_cypher, node_element_id_only=True, return_var="elemId2"
-    )
     try:
-        (
-            target_records,
-            pred_records,
-            target_ps_records,
-            pred_ps_records,
-        ) = await asyncio.gather(
-            run_query(driver, target_cypher, timeout),
-            run_query(driver, pred_cypher, timeout),
-            run_query(driver, target_ps_cypher, timeout),
-            run_query(driver, pred_ps_cypher, timeout),
-        )
+        pred_records = await run_query(driver, pred_cypher, timeout)
     except neo4j.exceptions.Neo4jError as e:
         if "TimedOut" in e.code:  # type: ignore
+            print("Timed Out")
             return None
         return -2.0  # Invalid and inaccurate
     except Exception as e:
         print(f"Warning: {e} while executing: {pred_cypher}")
         return -2.0
-    # PSJS
-    target_ps = set(record["elemId1"] for record in target_ps_records)
-    pred_ps = set(record["elemId2"] for record in pred_ps_records)
-    intersection = len(target_ps.intersection(pred_ps))
-    union = len(target_ps.union(pred_ps))
-    psjs = intersection / union if union > 0 else 0.0  # [0, 1] metric
-    psjs_score = psjs * 2 - 1  # [-1, 1] metric
 
     # Execution Accuracy
+    target_records = gold_cypher_cache[target_cypher]["gold_result"]
     target_executed = [
         {k: to_hashable(v) for k, v in record.items()} for record in target_records
     ]
@@ -204,7 +190,7 @@ async def execution_score(pred_cypher, target_cypher, driver, timeout=60):
             {k: to_hashable(v) for k, v in record.items()} for record in pred_records
         ]
     except TypeError:
-        return psjs_score - 1.0
+        return -1.0
 
     equal = _compare_execution(
         pred_executed=pred_executed,
@@ -212,7 +198,7 @@ async def execution_score(pred_cypher, target_cypher, driver, timeout=60):
         order_matters="order by" in target_cypher.lower(),
     )
 
-    return 2.0 if equal > 0 else psjs_score - 1.0
+    return 2.0 if equal > 0 else -1.0
 
 
 dataset = load_dataset("megagonlabs/cypherbench", split="train")

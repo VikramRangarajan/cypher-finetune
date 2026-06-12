@@ -50,5 +50,5 @@ INSTANCE_DIR=$HOME/cypherbench/.cache/neo4j-instances-2 bash start_neo4j_train_a
 cd ~/cypher-finetune
 uv run wait_until_train_db_up.py
 # If we reach timeout before run ends, wait returns immediately, goes into trap
-RUN_NAME=cypherbench-grpo-4 uv run grpo2.py --lora_rank=null --per_device_train_batch_size=4 --gradient_accumulation_steps=64 --num_generations=8 --steps_per_generation=32 &
+RUN_NAME=cypherbench-grpo-4 uv run grpo2.py --lora_rank=null --per_device_train_batch_size=2 --gradient_accumulation_steps=64 --num_generations=8 --steps_per_generation=32 &
 wait $!

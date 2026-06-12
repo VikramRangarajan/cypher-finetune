@@ -21,9 +21,11 @@ def run_query(driver: neo4j.Driver, cypher, timeout=None):
         records = result.data()
         return records
 
+
 def save_cache(cache):
     with open(CACHE_PATH, "wb") as f:
         pickle.dump(cache, f)
+
 
 def load_cache():
     if not CACHE_PATH.exists():
@@ -31,6 +33,7 @@ def load_cache():
     with open(CACHE_PATH, "rb") as f:
         cache = pickle.load(f)
     return cache
+
 
 def generate_cache():
     ds = datasets.load_dataset("megagonlabs/cypherbench", split="train")
@@ -60,7 +63,7 @@ def generate_cache():
         for row in ds:
             gold_cypher: str = row["gold_cypher"]  # type: ignore
             if gold_cypher in current_cache:
-                continue # skip queries already in cache
+                continue  # skip queries already in cache
             ps_cypher = get_ps_cypher(gold_cypher)
             graph: str = row["graph"]  # type: ignore
             driver = graph2conn[graph]
@@ -70,7 +73,9 @@ def generate_cache():
 
             future_pairs.append((gold_cypher, ps_cypher, gold_future, ps_future))
 
-        for i, (gold_cypher, ps_cypher, gold_future, ps_future) in tqdm(enumerate(future_pairs)):
+        for i, (gold_cypher, ps_cypher, gold_future, ps_future) in tqdm(
+            enumerate(future_pairs)
+        ):
             query_results[gold_cypher] = {
                 "gold_result": gold_future.result(),
                 "gold_ps_result": ps_future.result(),
@@ -80,7 +85,6 @@ def generate_cache():
         save_cache(query_results)
 
 
-
 def get_cache() -> dict[str, dict[str, list[dict[str, Any]]]]:
     if not CACHE_PATH.exists():
         print("Training dataset query cache not found. Generating now.")
@@ -88,8 +92,12 @@ def get_cache() -> dict[str, dict[str, list[dict[str, Any]]]]:
         print("Done generating training query cache.")
     cache = load_cache()
     if len(cache) != 8534:
+        print("Found partial cache, generating full cache")
         generate_cache()
-    return load_cache()
+        print("Finished generating full cache. Loading full cache")
+        cache = load_cache()
+        print("Loaded full cache")
+    return cache
 
 
 if __name__ == "__main__":
