@@ -51,6 +51,7 @@ class HParams(BaseSettings, cli_parse_args=True):
     num_generations: int = 2
     steps_per_generation: int = 8
     learning_rate: float = 1e-5
+    save_steps: int = 50
 
 
 hparams = HParams()
@@ -228,7 +229,7 @@ print(f"Maximum prompt length: {maximum_length}")
 max_completion_length = max_seq_length - (maximum_length + 1)
 
 
-space_id = f"{hub_org}/{run_name}_space" if run_name != "DBG" else None
+space_id = f"{hub_org}/cypherbench-grpo-space" if run_name != "DBG" else None
 
 training_args = GRPOConfig(
     learning_rate=hparams.learning_rate,
@@ -241,7 +242,7 @@ training_args = GRPOConfig(
     max_completion_length=max_completion_length,
     # torch_compile=True,
     num_train_epochs=1,
-    save_steps=50,
+    save_steps=hparams.save_steps,
     report_to="none" if run_name == "DBG" else "trackio",
     trackio_space_id=space_id,
     run_name=run_name,
