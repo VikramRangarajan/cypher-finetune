@@ -64,7 +64,7 @@ def generate_cache():
             gold_cypher: str = row["gold_cypher"]  # type: ignore
             if gold_cypher in current_cache:
                 continue  # skip queries already in cache
-            ps_cypher = get_ps_cypher(gold_cypher)
+            ps_cypher = get_ps_cypher(gold_cypher, "elemId1", True)
             graph: str = row["graph"]  # type: ignore
             driver = graph2conn[graph]
 

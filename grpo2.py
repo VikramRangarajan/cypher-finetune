@@ -6,6 +6,7 @@ from time import perf_counter
 import neo4j
 import neo4j.exceptions
 from cypherbench.metrics.execution_accuracy import to_hashable, _compare_execution
+from cypherbench.metrics.provenance_subgraph_jaccard_similarity import get_ps_cypher
 from cypherbench.schema import PropertyGraphSchema, DataType
 from query_cache import get_cache
 
@@ -52,6 +53,7 @@ class HParams(BaseSettings, cli_parse_args=True):
     steps_per_generation: int = 8
     learning_rate: float = 1e-5
     save_steps: int = 50
+    query_timeout: int = 30
 
 
 hparams = HParams()
@@ -163,15 +165,25 @@ async def run_query(driver: neo4j.AsyncDriver, cypher, timeout):
         return records
 
 
-async def execution_score(pred_cypher, target_cypher, driver, timeout=60):
+async def execution_score(
+    pred_cypher, target_cypher, driver, timeout=hparams.query_timeout
+):
     # +2 if accurate (and therefore valid syntax)
     # -2 if invalid syntax (and therefore inaccurate), or db error
-    # If executable but inaccurate, return -1
+    # If executable but inaccurate, return psjs - 1.0 (-2 to 0 scale)
     if pred_cypher.strip() == target_cypher.strip():
         return 2.0
 
+    # PSJS Setup
+    pred_ps_cypher = get_ps_cypher(
+        pred_cypher, node_element_id_only=True, return_var="elemId2"
+    )
+
     try:
-        pred_records = await run_query(driver, pred_cypher, timeout)
+        pred_records, pred_ps_records = await asyncio.gather(
+            run_query(driver, pred_cypher, timeout),
+            run_query(driver, pred_ps_cypher, timeout),
+        )
     except neo4j.exceptions.Neo4jError as e:
         if "TimedOut" in e.code:  # type: ignore
             print("Timed Out")
@@ -180,6 +192,15 @@ async def execution_score(pred_cypher, target_cypher, driver, timeout=60):
     except Exception as e:
         print(f"Warning: {e} while executing: {pred_cypher}")
         return -2.0
+
+    # PSJS
+    target_ps_records = gold_cypher_cache[target_cypher]["gold_ps_result"]
+    target_ps = set(record["elemId1"] for record in target_ps_records)
+    pred_ps = set(record["elemId2"] for record in pred_ps_records)
+    intersection = len(target_ps.intersection(pred_ps))
+    union = len(target_ps.union(pred_ps))
+    psjs = intersection / union if union > 0 else 0.0  # [0, 1] metric
+    psjs_score = psjs * 2 - 1  # [-1, 1] metric
 
     # Execution Accuracy
     target_records = gold_cypher_cache[target_cypher]["gold_result"]
@@ -191,7 +212,7 @@ async def execution_score(pred_cypher, target_cypher, driver, timeout=60):
             {k: to_hashable(v) for k, v in record.items()} for record in pred_records
         ]
     except TypeError:
-        return -1.0
+        return psjs_score - 1.0
 
     equal = _compare_execution(
         pred_executed=pred_executed,
@@ -199,7 +220,7 @@ async def execution_score(pred_cypher, target_cypher, driver, timeout=60):
         order_matters="order by" in target_cypher.lower(),
     )
 
-    return 2.0 if equal > 0 else -1.0
+    return 2.0 if equal > 0 else psjs_score - 1.0
 
 
 dataset = load_dataset("megagonlabs/cypherbench", split="train")
@@ -253,6 +274,7 @@ training_args = GRPOConfig(
     mask_truncated_completions=True,
     gradient_checkpointing=True,
     remove_unused_columns=False,
+    seed=123,
 )
 
 # ---- Trainer ----
