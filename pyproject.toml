@@ -11,14 +11,14 @@ dependencies = [
     "peft",
     "bitsandbytes",
     "pillow",
-    "torch",
+    "torch==2.10.*",
     "torchvision",
     "torchaudio",
     "langchain",
     "trackio[gpu]==0.26.*",
     "transformers>=5.5.*",
     "cypherbench",
-    "torchao==0.17.*",
+    "torchao==0.16.*",
     "types-tqdm>=4.68.0.20260608",
 ]
 

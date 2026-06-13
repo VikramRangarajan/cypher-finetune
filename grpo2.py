@@ -17,7 +17,7 @@ from trl import GRPOConfig, GRPOTrainer
 from safetensors import safe_open
 import trackio
 import warnings
-from neo4j import PreviewWarning
+from neo4j.warnings import PreviewWarning
 from pydantic_settings import BaseSettings
 
 from trl.extras.profiling import ProfilingContext
@@ -45,7 +45,8 @@ warnings.filterwarnings("ignore", category=PreviewWarning)
 
 
 class HParams(BaseSettings, cli_parse_args=True):
-    max_seq_length: int = 2048
+    model: str = "google/gemma-4-E2B-it"
+    max_seq_length: int = 512
     lora_rank: int | None = 32
     per_device_train_batch_size: int = 2
     gradient_accumulation_steps: int = 8
@@ -54,6 +55,7 @@ class HParams(BaseSettings, cli_parse_args=True):
     learning_rate: float = 1e-5
     save_steps: int = 50
     query_timeout: int = 30
+    lora_exclude_modules: list[str] = ["vision_tower", "audio_tower"]
 
 
 hparams = HParams()
@@ -120,19 +122,19 @@ Graph Schema:
 Question: {question}
 Cypher: """
 
-model = AutoModelForCausalLM.from_pretrained("google/gemma-4-E2B-it")
+model = AutoModelForCausalLM.from_pretrained(hparams.model)
 
-tokenizer = AutoProcessor.from_pretrained("google/gemma-4-E2B-it")
+tokenizer = AutoProcessor.from_pretrained(hparams.model)
 assert tokenizer is not None
 
 if lora_rank is not None:
     lora_config = LoraConfig(
         r=lora_rank,
         lora_alpha=lora_rank * 2,
-        exclude_modules=["vision_tower", "audio_tower"],
+        exclude_modules=hparams.lora_exclude_modules,
     )
     model = get_peft_model(model, lora_config)
-else:
+elif "gemma-4" in hparams.model:
     for name, param in model.named_parameters():
         if "language_model" not in name or not any(
             f"{k}_proj" in name for k in ("q", "k", "v", "o", "gate", "up", "down")
@@ -235,27 +237,9 @@ def format_prompt(sample):
 
 dataset = dataset.map(lambda x: {"prompt": format_prompt(x)})
 
-prompt_template_example = PROMPT_TEMPLATE.format(
-    schema=graph2schema["biology"], question="Sample question?"
-)
-maximum_length = len(
-    tokenizer.apply_chat_template(  # type: ignore
-        [{"role": "user", "content": prompt_template_example}],
-        add_generation_prompt=True,
-        tokenize=True,
-    )[0]
-)
-
-print(f"Maximum prompt length: {maximum_length}")
-
-max_completion_length = max_seq_length - (maximum_length + 1)
-
-
 space_id = f"{hub_org}/cypherbench-grpo-space" if run_name != "DBG" else None
 
 training_args = GRPOConfig(
-    use_vllm=True,
-    vllm_mode="colocate",
     learning_rate=hparams.learning_rate,
     optim="adamw_torch_8bit" if lora_rank is None else "adamw_8bit",
     logging_steps=1,
@@ -263,7 +247,7 @@ training_args = GRPOConfig(
     gradient_accumulation_steps=hparams.gradient_accumulation_steps,
     num_generations=hparams.num_generations,
     steps_per_generation=hparams.steps_per_generation,
-    max_completion_length=max_completion_length,
+    max_completion_length=hparams.max_seq_length,
     # torch_compile=True,
     num_train_epochs=1,
     save_steps=hparams.save_steps,
