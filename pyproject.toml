@@ -7,19 +7,23 @@ requires-python = ">=3.13"
 dependencies = [
     "datasets==4.8.*",
     "pydantic-settings",
-    "trl==1.5.*",
+    "trl[vllm]==1.6.*",
     "peft",
     "bitsandbytes",
     "pillow",
     "torch",
     "torchvision",
+    "torchaudio",
     "langchain",
     "trackio[gpu]==0.26.*",
-    "transformers==5.10.*",
+    "transformers>=5.5.*",
     "cypherbench",
     "torchao==0.17.*",
     "types-tqdm>=4.68.0.20260608",
 ]
+
+[tool.uv]
+override-dependencies = ["vllm==0.19.1"]
 
 [tool.uv.sources]
 cypherbench = { git = "https://github.com/VikramRangarajan/cypherbench.git" }
@@ -29,10 +33,21 @@ torch = [
 torchvision = [
     { index = "pytorch-cu129" },
 ]
+torchaudio = [
+    { index = "pytorch-cu129" },
+]
+vllm = [
+    { index = "vllm-cu129" },
+]
 
 [[tool.uv.index]]
 name = "pytorch-cu129"
 url = "https://download.pytorch.org/whl/cu129"
+explicit = true
+
+[[tool.uv.index]]
+name = "vllm-cu129"
+url = "https://wheels.vllm.ai/0.19.1/cu129/"
 explicit = true
 
 [tool.pyrefly]
@@ -40,7 +55,6 @@ project-includes = [
     "**/*.py*",
     "**/*.ipynb",
 ]
-project-excludes = ["grpo.py"]
 
 [dependency-groups]
 dev = [

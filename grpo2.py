@@ -254,6 +254,8 @@ max_completion_length = max_seq_length - (maximum_length + 1)
 space_id = f"{hub_org}/cypherbench-grpo-space" if run_name != "DBG" else None
 
 training_args = GRPOConfig(
+    use_vllm=True,
+    vllm_mode="colocate",
     learning_rate=hparams.learning_rate,
     optim="adamw_torch_8bit" if lora_rank is None else "adamw_8bit",
     logging_steps=1,
