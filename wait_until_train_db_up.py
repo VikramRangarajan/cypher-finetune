@@ -28,6 +28,7 @@ def main():
     parser.add_argument(
         "--neo4j_info", default=Path.home() / "cypherbench" / "neo4j_info.json"
     )
+    parser.add_argument("--test", action="store_true")
     args = parser.parse_args()
     print(args)
     print()
@@ -87,6 +88,8 @@ def main():
 
     if is_test_ready:
         print("All testing graphs are ready!")
+        if args.test:
+            exit(0)
     else:
         print("Warning: At least one testing graph is not ready!")
 
