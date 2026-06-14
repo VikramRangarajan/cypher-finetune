@@ -20,6 +20,7 @@ dependencies = [
     "cypherbench",
     "torchao==0.16.*",
     "types-tqdm>=4.68.0.20260608",
+    "types-tabulate>=0.10.0.20260508",
 ]
 
 [tool.uv]
